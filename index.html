@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=IBM+Plex+Mono:wght@400&display=swap">
 <style>
-  /* Layout: one column. Screen on top, tabs underneath (Link, Browse, Channels, Favourites, Recent, Playlists). */
+  /* Layout: one column. Screen on top, tabs underneath (Link, Channels, Favourites, Recent, Playlists). */
   :root {
     --bg: #0e1013;
     --panel: #171a1f;
@@ -90,7 +90,6 @@
 
   <nav role="tablist">
     <button role="tab" data-tab="link" aria-selected="true">Link</button>
-    <button role="tab" data-tab="browse" aria-selected="false">Browse</button>
     <button role="tab" data-tab="channels" aria-selected="false">Channels</button>
     <button role="tab" data-tab="favs" aria-selected="false">Favourites</button>
     <button role="tab" data-tab="recent" aria-selected="false">Recent</button>
@@ -104,20 +103,7 @@
     </form>
     <p class="note">Works with free pages that openly share their video, plus YouTube, Vimeo, Dailymotion and direct stream links. Pages that need a login, a subscription or copy protection won't work.</p>
     <div class="list" id="resultList"></div>
-    <p class="note" id="browseHint" hidden>
-      <button class="plain" id="startBrowse" type="button">Browse this page link by link →</button>
-    </p>
     <p class="note" id="origWrap" hidden><a id="orig" target="_blank" rel="noopener">Open the original page instead</a></p>
-  </section>
-
-  <section id="tab-browse" hidden>
-    <div class="bar">
-      <button class="plain" id="browseBack" type="button" hidden>← Back</button>
-      <button class="plain" id="browseHome" type="button">Start over</button>
-      <span class="plain" id="browseCrumb" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">No page loaded</span>
-    </div>
-    <p class="note">Tap through links inside a page — one step at a time — until you reach a video.</p>
-    <div class="list" id="browseList"></div>
   </section>
 
   <section id="tab-channels" hidden>
@@ -362,4 +348,207 @@ function renderPlaylists() {
 function renderAll() {
   renderChannels();
   renderList("favList", state.favs, "Tap the star next to anything you play to save it here.");
-  renderList("recentList",
+  renderList("recentList", state.recent, "Things you play will show up here.");
+  if (results.length) $("resultList").replaceChildren(...results.map(row));
+  renderPlaylists();
+}
+
+/* ---------- messages ---------- */
+function say(text, isError) {
+  $("msg").textContent = text || "";
+  $("msg").className = isError ? "msg err" : "msg";
+}
+
+/* ---------- favourites and recent ---------- */
+function slim(ch) { return { name: ch.name, url: ch.url, logo: ch.logo || "", group: ch.group || "", kind: ch.kind || "" }; }
+function toggleFav(ch) {
+  if (isFav(ch.url)) state.favs = state.favs.filter(f => f.url !== ch.url);
+  else state.favs.unshift(slim(ch));
+  save(); renderAll();
+}
+function addRecent(ch) {
+  state.recent = [slim(ch), ...state.recent.filter(r => r.url !== ch.url)].slice(0, 30);
+  save();
+}
+
+/* ---------- playback ---------- */
+function stopAll() {
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+  frame.src = "about:blank";
+}
+
+function play(ch) {
+  stopAll();
+  say("");
+  current = ch;
+  $("empty").hidden = true;
+  $("nowName").textContent = ch.name;
+  $("nowGroup").textContent = ch.group || "";
+
+  if (ch.kind === "embed") {
+    video.hidden = true;
+    frame.hidden = false;
+    frame.src = ch.url;
+    if (/youtube/.test(ch.url)) say("Playing in YouTube's own player, which may show YouTube's ads.");
+    else say("Playing in the site's own player.");
+  } else {
+    frame.hidden = true;
+    video.hidden = false;
+    if (location.protocol === "https:" && ch.url.startsWith("http:")) {
+      say("This stream uses an http link, which browsers often block on https pages.", true);
+    }
+    const plainFile = kindOf(ch.url) === "file";
+    if (!plainFile && window.Hls && Hls.isSupported()) {
+      hls = new Hls();
+      hls.on(Hls.Events.ERROR, (_, d) => {
+        if (d.fatal) say("This stream couldn't load. It may be offline, or the source doesn't allow other apps to play it.", true);
+      });
+      hls.loadSource(ch.url);
+      hls.attachMedia(video);
+    } else {
+      video.src = ch.url;
+    }
+    video.play().catch(() => {});
+  }
+
+  addRecent(ch);
+  renderAll();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+video.addEventListener("error", () => {
+  if (!hls && current && current.kind !== "embed" && video.getAttribute("src")) {
+    say("This video couldn't load. It may be offline, or your browser can't play this format.", true);
+  }
+});
+
+/* ---------- link viewer ---------- */
+async function openLink(raw) {
+  let u;
+  try { u = new URL(raw.trim()); }
+  catch { say("That doesn't look like a full web address. It should start with https://", true); return; }
+
+  $("linkUrl").value = u.href;
+  $("orig").href = u.href;
+  $("origWrap").hidden = true;
+  results = [];
+  $("resultList").replaceChildren();
+
+  const name = hostOf(u.href);
+  const embed = toEmbed(u.href);
+  if (embed) return play({ name, url: embed, kind: "embed", group: "Web link" });
+  const k = kindOf(u.href);
+  if (k !== "page") return play({ name, url: u.href, kind: k, group: "Web link" });
+
+  if (location.protocol === "file:") {
+    say("Finding videos inside web pages only works on the online version of Clean Player.", true);
+    $("origWrap").hidden = false;
+    return;
+  }
+
+  say("Looking for a video on that page…");
+  let data;
+  try {
+    const r = await fetch("api/find?url=" + encodeURIComponent(u.href));
+    try { data = await r.json(); } catch { throw new Error("The video finder isn't set up on this site yet. See README.md."); }
+    if (!r.ok) throw new Error(data.error || "Couldn't check that page.");
+  } catch (err) {
+    say(err.message, true);
+    $("origWrap").hidden = false;
+    return;
+  }
+
+  if (!data.results || !data.results.length) {
+    say("No free video was found on that page. It may need a login, use copy protection, or load its player in a way this can't read.", true);
+    $("origWrap").hidden = false;
+    return;
+  }
+
+  const title = data.title || name;
+  results = data.results.map((x, i) => ({
+    name: title,
+    url: x.url,
+    kind: x.kind,
+    group: `${hostOf(x.url)} · ${x.from}` + (data.results.length > 1 ? ` · option ${i + 1}` : "")
+  }));
+  play(results[0]);
+  if (results.length > 1) say(`Found ${results.length} videos. If the first one isn't right, pick another below.`);
+  $("origWrap").hidden = false;
+}
+
+$("linkForm").addEventListener("submit", e => {
+  e.preventDefault();
+  openLink($("linkUrl").value);
+});
+
+/* ---------- adding playlists ---------- */
+async function fetchText(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.text();
+}
+async function refresh(p, loud) {
+  try {
+    if (loud) say(`Updating ${p.name}…`);
+    const text = await fetchText(p.url);
+    if (!/#EXTM3U|#EXTINF/i.test(text)) throw new Error("not a playlist");
+    p.text = text;
+    if (!save()) say(`${p.name} is too big to store on this device. It will reload from its link each time.`);
+    else if (loud) say(`Updated ${p.name}.`);
+    rebuild();
+  } catch {
+    if (loud) say(`Couldn't update ${p.name}. Showing the last saved copy.`, true);
+  }
+}
+
+$("addForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const url = $("plUrl").value.trim();
+  const name = $("plName").value.trim() || hostOf(url);
+  say("Loading playlist…");
+  try {
+    const text = await fetchText(url);
+    if (!/#EXTM3U|#EXTINF/i.test(text)) throw new Error("not a playlist");
+    state.playlists.push({ id: Date.now().toString(36), name, url, text });
+    if (!save()) say(`Added ${name}, but it's too big to store on this device. It will reload from its link each time.`);
+    else say(`Added ${name}.`);
+    $("plUrl").value = ""; $("plName").value = "";
+    rebuild();
+  } catch {
+    say("Couldn't load that playlist. Check the link, or the site may not let other apps read it. If you can download the .m3u file, use Import instead.", true);
+  }
+});
+
+$("plFile").addEventListener("change", async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  if (!/#EXTINF/i.test(text)) { say("That file isn't an M3U playlist.", true); return; }
+  const name = f.name.replace(/\.(m3u8?|txt)$/i, "");
+  state.playlists.push({ id: Date.now().toString(36), name, url: "", text });
+  if (!save()) say(`Imported ${name}, but it's too big to keep after you close the app.`, true);
+  else say(`Imported ${name}.`);
+  e.target.value = "";
+  rebuild();
+});
+
+/* ---------- tabs and filters ---------- */
+document.querySelectorAll("nav button").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b === btn));
+    document.querySelectorAll("main > section").forEach(s => { s.hidden = s.id !== "tab-" + btn.dataset.tab; });
+  };
+});
+$("search").addEventListener("input", renderChannels);
+$("group").addEventListener("change", renderChannels);
+
+/* ---------- start ---------- */
+rebuild();
+state.playlists.filter(p => p.url).forEach(p => refresh(p, false));
+const shared = new URLSearchParams(location.search).get("url");
+if (shared) openLink(shared);
+</script>
+</body>
+</html>

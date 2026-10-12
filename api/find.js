@@ -105,7 +105,6 @@ function extract(html, pageHref) {
 
     if (pathname === "/" || pathname === "" || pathname === "/index.html") return;
 
-    // Strict anti-ad & anti-pop-up filter: block any known ad/tracker/social domains or terms
     const adBlocklist = /ads|popup|popunder|click|track|stat|analytic|affil|offer|telegram|whatsapp|twitter|facebook|discord|login|signup|register|donate|support|banner|sponsor/i;
     if (adBlocklist.test(hostname) || adBlocklist.test(pathname)) {
       return;
@@ -129,7 +128,6 @@ function extract(html, pageHref) {
       return;
     }
 
-    // Must be a verified broadcast stream source
     const isStreamIndicator = /watch|stream|tnt|sky|bt\s*sport|supersport|espn|fhd|hd|sports|channel|soccerstreams|hesgoal|crackstreams|weakstreams|sportsbest|pitchstream|alpha|ripple|wolfstreams|wawes|supertipz/i.test(lowerText) ||
                               /^live\d*\.|^links\.|fxtrend|pitchstream|alphastreams|ripplestream|wolfstreams|footyicon|wildgames/i.test(hostname);
 
@@ -174,7 +172,11 @@ function extract(html, pageHref) {
     try { abs = new URL(decode(s), pageHref).href; } catch { continue; }
     if (!/^https?:/i.test(abs)) continue;
     frames.push(abs);
-    if (toEmbed(abs) || /player|embed|video/i.test(abs)) add(abs, "Embedded player");
+    const e = toEmbed(abs);
+    if (e || /player|embed|video/i.test(abs)) {
+      // Use parent pageHref for custom iframes so domain-locking / referer checks pass
+      found.push({ url: e || pageHref, kind: "embed", from: "Embedded player" });
+    }
   }
   meta("twitter:player").forEach(u => add(u, "Shared player tag"));
 

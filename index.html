@@ -52,11 +52,11 @@
 
   section { display: grid; gap: 12px; }
   .bar { display: flex; gap: 8px; flex-wrap: wrap; }
-  input, select { flex: 1 1 200px; min-width: 0; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 11px 12px; font: 14px var(--mono); }
+  input, select, textarea { flex: 1 1 200px; min-width: 0; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 11px 12px; font: 14px var(--mono); }
   select { flex: 0 1 180px; font-family: var(--display); }
   button.go { background: var(--accent); color: #1a1405; border: 0; border-radius: 6px; padding: 11px 18px; font: 700 14px var(--display); cursor: pointer; }
   button.plain, .plain { background: var(--panel-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; font: 500 13px var(--display); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
-  input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .list { display: grid; gap: 2px; }
   .row { display: flex; align-items: center; gap: 10px; background: var(--panel); border-radius: 6px; padding: 6px 6px 6px 8px; }
@@ -128,12 +128,14 @@
 
   <section id="tab-playlists" hidden>
     <h2>Add a playlist</h2>
-    <form class="bar" id="addForm">
-      <input id="plName" type="text" placeholder="Name (optional)" autocomplete="off">
-      <input id="plUrl" type="url" placeholder="https://example.com/playlist.m3u" autocomplete="off" required>
-      <button class="go" type="submit">Add</button>
+    <form class="bar" id="addForm" style="display: grid; gap: 8px;">
+      <div class="bar">
+        <input id="plName" type="text" placeholder="Name (e.g., Formula 1)" autocomplete="off">
+        <button class="go" type="submit">Add playlist</button>
+      </div>
+      <textarea id="plRawText" placeholder="Paste your raw M3U / TXT playlist text here..." rows="4"></textarea>
     </form>
-    <div><span class="plain file">Import .m3u file<input id="plFile" type="file" accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,text/plain"></span></div>
+    <div><span class="plain file">Or import .m3u / .txt file<input id="plFile" type="file" accept=".m3u,.m3u8,.txt,audio/x-mpegurl,application/vnd.apple.mpegurl,text/plain"></span></div>
 
     <h2>Your playlists</h2>
     <div class="list" id="playlistList"></div>
@@ -333,15 +335,9 @@ function renderPlaylists() {
     const b = document.createElement("b"); b.textContent = p.name;
     const n = p.text ? parseM3U(p.text, p.name).length : 0;
     const s = document.createElement("small");
-    s.textContent = `${n} channel${n === 1 ? "" : "s"}` + (p.url ? " · updates from link" : " · saved file");
+    s.textContent = `${n} channel${n === 1 ? "" : "s"}` + (p.url ? " · updates from link" : " · pasted text");
     t.append(b, s);
     r.append(t);
-    if (p.url) {
-      const up = document.createElement("button");
-      up.className = "plain"; up.type = "button"; up.textContent = "Refresh";
-      up.onclick = () => refresh(p, true);
-      r.append(up);
-    }
     const del = document.createElement("button");
     del.className = "plain"; del.type = "button"; del.textContent = "Remove";
     del.onclick = () => {
@@ -394,7 +390,6 @@ function play(ch) {
   $("nowName").textContent = ch.name;
   $("nowGroup").textContent = ch.group || "";
 
-  // Show or hide external link button
   const ext = $("externalLink");
   ext.href = ch.url;
   ext.hidden = false;
@@ -507,40 +502,28 @@ $("linkForm").addEventListener("submit", e => {
   openLink($("linkUrl").value);
 });
 
-async function fetchText(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return r.text();
-}
-async function refresh(p, loud) {
-  try {
-    if (loud) say(`Updating ${p.name}…`);
-    const text = await fetchText(p.url);
-    if (!/#EXTM3U|#EXTINF/i.test(text)) throw new Error("not a playlist");
-    p.text = text;
-    if (!save()) say(`${p.name} is too big to store on this device. It will reload from its link each time.`);
-    else if (loud) say(`Updated ${p.name}.`);
-    rebuild();
-  } catch {
-    if (loud) say(`Couldn't update ${p.name}. Showing the last saved copy.`, true);
-  }
-}
-
-$("addForm").addEventListener("submit", async e => {
+$("addForm").addEventListener("submit", e => {
   e.preventDefault();
-  const url = $("plUrl").value.trim();
-  const name = $("plName").value.trim() || hostOf(url);
-  say("Loading playlist…");
-  try {
-    const text = await fetchText(url);
-    if (!/#EXTM3U|#EXTINF/i.test(text)) throw new Error("not a playlist");
-    state.playlists.push({ id: Date.now().toString(36), name, url, text });
-    if (!save()) say(`Added ${name}, but it's too big to store on this device. It will reload from its link each time.`);
-    else say(`Added ${name}.`);
-    $("plUrl").value = ""; $("plName").value = "";
+  const name = $("plName").value.trim() || "My Playlist";
+  const rawText = $("plRawText").value.trim();
+
+  if (!rawText) {
+    say("Please paste the playlist text into the box below.", true);
+    return;
+  }
+  if (!/#EXTINF/i.test(rawText)) {
+    say("That text doesn't look like a valid M3U playlist.", true);
+    return;
+  }
+
+  state.playlists.push({ id: Date.now().toString(36), name, url: "", text: rawText });
+  if (!save()) {
+    say("That playlist is too big to store on this device.", true);
+  } else {
+    say(`Added ${name}.`);
+    $("plName").value = "";
+    $("plRawText").value = "";
     rebuild();
-  } catch {
-    say("Couldn't load that playlist. Check the link, or the site may not let other apps read it. If you can download the .m3u file, use Import instead.", true);
   }
 });
 
@@ -567,7 +550,6 @@ $("search").addEventListener("input", renderChannels);
 $("group").addEventListener("change", renderChannels);
 
 rebuild();
-state.playlists.filter(p => p.url).forEach(p => refresh(p, false));
 const shared = new URLSearchParams(location.search).get("url");
 if (shared) openLink(shared);
 </script>

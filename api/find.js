@@ -1,7 +1,5 @@
 // Clean Player finder.
-// Opens a public web page and returns the video it openly shares about itself:
-// sharing tags (og:video), page video info (schema.org VideoObject), <video> tags,
-// embedded players, plain stream links, and filtered broadcast stream links.
+// Scrapes public web pages while strictly filtering out ads, pop-ups, and trackers.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|[?::1]?$|.*\.local$\vert{}.*\.internal$)/i;
 
@@ -107,15 +105,19 @@ function extract(html, pageHref) {
 
     if (pathname === "/" || pathname === "" || pathname === "/index.html") return;
 
-    // Clean up text: decode entities, strip out status/timer clutter
+    // Strict anti-ad & anti-pop-up filter: block any known ad/tracker/social domains or terms
+    const adBlocklist = /ads|popup|popunder|click|track|stat|analytic|affil|offer|telegram|whatsapp|twitter|facebook|discord|login|signup|register|donate|support|banner|sponsor/i;
+    if (adBlocklist.test(hostname) || adBlocklist.test(pathname)) {
+      return;
+    }
+
     let text = decode(rawText.replace(/<[^>]*>/g, " "));
     text = text.replace(/^(Match Started|Ended|\d+\s*(min|hr|hrs|hours|m)(\s*and\s*\d+\s*(min|m))?\s*from\s*now)\s*/i, "").trim();
     text = text.replace(/\s+/g, " ");
 
     const lowerText = text.toLowerCase();
 
-    // Blacklist menu headers, sports categories, leagues, and team names
-    const blacklist = [
+    const menuBlocklist = [
       "football", "soccer", "premier league", "champions league", "europa league", 
       "la liga", "serie a", "bundseliga", "ligue 1", "formula 1", "motogp", 
       "boxing", "cricket", "tennis", "joshua vs usyk", "manchester united", 
@@ -123,11 +125,11 @@ function extract(html, pageHref) {
       "barcelona", "atletico madrid", "psg", "bayern munich", "juventus", 
       "inter milan", "ac milan", "fifa world cup"
     ];
-    if (blacklist.some(b => lowerText === b || (lowerText.length < 25 && lowerText.includes(b)))) {
+    if (menuBlocklist.some(b => lowerText === b || (lowerText.length < 25 && lowerText.includes(b)))) {
       return;
     }
 
-    // Must be a broadcast stream link (contains watch/stream/sports keywords or external stream provider domain)
+    // Must be a verified broadcast stream source
     const isStreamIndicator = /watch|stream|tnt|sky|bt\s*sport|supersport|espn|fhd|hd|sports|channel|soccerstreams|hesgoal|crackstreams|weakstreams|sportsbest|pitchstream|alpha|ripple|wolfstreams|wawes|supertipz/i.test(lowerText) ||
                               /^live\d*\.|^links\.|fxtrend|pitchstream|alphastreams|ripplestream|wolfstreams|footyicon|wildgames/i.test(hostname);
 

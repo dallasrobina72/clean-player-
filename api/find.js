@@ -1,5 +1,5 @@
 // Clean Player finder.
-// Scrapes public web pages while strictly filtering out ads, pop-ups, and trackers.
+// Scrapes public web pages and deep-crawls embedded iframes to extract raw video streams.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|[?::1]?$|.*\.local$\vert{}.*\.internal$)/i;
 
@@ -69,7 +69,7 @@ async function getPage(href) {
       signal: ctrl.signal,
       redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; CleanPlayer/1.0)",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,*/*"
       }
     });
@@ -128,8 +128,8 @@ function extract(html, pageHref) {
       return;
     }
 
-    const isStreamIndicator = /watch|stream|tnt|sky|bt\s*sport|supersport|espn|fhd|hd|sports|channel|soccerstreams|hesgoal|crackstreams|weakstreams|sportsbest|pitchstream|alpha|ripple|wolfstreams|wawes|supertipz/i.test(lowerText) ||
-                              /^live\d*\.|^links\.|fxtrend|pitchstream|alphastreams|ripplestream|wolfstreams|footyicon|wildgames/i.test(hostname);
+    const isStreamIndicator = /watch|stream|tnt|sky|bt\s*sport|supersport|espn|fhd|hd|sports|channel|soccerstreams|hesgoal|crackstreams|weakstreams|sportsbest|pitchstream|alpha|ripple|wolfstreams|wawes|supertipz|main\s*\d+/i.test(lowerText) ||
+                              /^live\d*\.|^links\.|fxtrend|pitchstream|alphastreams|ripplestream|wolfstreams|footyicon|wildgames|trendy48/i.test(hostname);
 
     if (!isStreamIndicator) return;
 
@@ -174,14 +174,15 @@ function extract(html, pageHref) {
     frames.push(abs);
     const e = toEmbed(abs);
     if (e || /player|embed|video/i.test(abs)) {
-      // Use parent pageHref for custom iframes so domain-locking / referer checks pass
-      found.push({ url: e || pageHref, kind: "embed", from: "Embedded player" });
+      found.push({ url: e || abs, kind: "embed", from: "Embedded player" });
     }
   }
   meta("twitter:player").forEach(u => add(u, "Shared player tag"));
 
+  // Scan raw HTML/JS for direct stream file links (.m3u8 or .mp4)
   for (const m of html.matchAll(/https?:\\?\/\\?\/[^\s"'<>]+?\.(m3u8|mp4)(\?[^\s"'<>\\]*)?/gi)) {
-    add(m[0], "Link in page");
+    const streamUrl = decode(m[0].replace(/\\/g, ""));
+    add(streamUrl, "Direct stream in page");
   }
 
   for (const tag of html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)) {
@@ -228,19 +229,26 @@ module.exports = async (req, res) => {
   const first = extract(html, page.href);
   let found = first.found;
 
-  if (!found.length) {
-    const site = siteOf(page.hostname);
-    const own = [...new Set(first.frames)]
-      .filter(f => { try { const h = new URL(f).hostname; return siteOf(h) === site && !BLOCKED_HOST.test(h); } catch { return false; } })
-      .slice(0, 3);
-    for (const f of own) {
+  // Deep-crawl embedded frames (like trendy48, players, etc.) to extract raw stream URLs
+  if (first.frames.length) {
+    const framesToInspect = [...new Set(first.frames)]
+      .filter(f => { try { return !BLOCKED_HOST.test(new URL(f).hostname); } catch { return false; } })
+      .slice(0, 4);
+
+    for (const f of framesToInspect) {
       try {
         const r = await getPage(f);
         if (!r.ok) continue;
-        const inner = extract((await r.text()).slice(0, 3000000), f);
-        inner.found.forEach(x => { x.from = "Site's own player"; });
+        const innerHtml = (await r.text()).slice(0, 3000000);
+        const inner = extract(innerHtml, f);
+        inner.found.forEach(x => { x.from = "Embedded player source"; });
         found = found.concat(inner.found);
-        if (!inner.found.length) found.push({ url: f, kind: "embed", from: "Site's own player" });
+
+        // Also check raw script text inside the embed page for hidden .m3u8 links
+        for (const m of innerHtml.matchAll(/https?:\\?\/\\?\/[^\s"'<>]+?\.(m3u8|mp4)(\?[^\s"'<>\\]*)?/gi)) {
+          const streamUrl = decode(m[0].replace(/\\/g, ""));
+          found.push({ url: streamUrl, kind: "stream", from: "Extracted stream URL" });
+        }
       } catch {}
     }
   }

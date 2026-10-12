@@ -1,0 +1,10 @@
+# Netlify settings for Clean Player
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Send the app's finder requests to the Netlify function
+[[redirects]]
+  from = "/api/find"
+  to = "/.netlify/functions/find"
+  status = 200

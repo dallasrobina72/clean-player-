@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Clean Player">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1013">
+<title>Clean Player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+  /* Layout: one column. Screen on top, tabs underneath (Link, Channels, Favourites, Recent, Playlists). */
+  :root {
+    --bg: #0e1013;
+    --panel: #171a1f;
+    --panel-2: #1e222a;
+    --line: #2a2f37;
+    --fg: #e8eaee;
+    --muted: #8b93a1;
+    --accent: #f2b33d;
+    --bad: #ff7a6b;
+    --display: "Archivo", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--display); }
+  body { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  main { max-width: 960px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 40px; display: grid; gap: 14px; }
+
+  h1 { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
+  h1 span { color: var(--accent); }
+  a { color: var(--accent); }
+
+  .screen { position: relative; width: 100%; aspect-ratio: 16 / 9; max-width: 100%; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .screen video, .screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-family: var(--mono); font-size: 13px; text-align: center; padding: 16px; pointer-events: none; }
+
+  .now { display: grid; gap: 2px; min-width: 0; }
+  .now b { font-size: 17px; overflow-wrap: anywhere; }
+  .now small { color: var(--muted); }
+  .msg { margin: 0; min-height: 1.4em; font-size: 13px; color: var(--muted); }
+  .msg.err { color: var(--bad); }
+
+  nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 10px 12px; font: 700 14px var(--display); cursor: pointer; white-space: nowrap; }
+  nav button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+
+  section { display: grid; gap: 12px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; }
+  input, select { flex: 1 1 200px; min-width: 0; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 11px 12px; font: 14px var(--mono); }
+  select { flex: 0 1 180px; font-family: var(--display); }
+  button.go { background: var(--accent); color: #1a1405; border: 0; border-radius: 6px; padding: 11px 18px; font: 700 14px var(--display); cursor: pointer; }
+  button.plain, .plain { background: var(--panel-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; font: 500 13px var(--display); cursor: pointer; }
+  input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .list { display: grid; gap: 2px; }
+  .row { display: flex; align-items: center; gap: 10px; background: var(--panel); border-radius: 6px; padding: 6px 6px 6px 8px; }
+  .row.playing { box-shadow: inset 3px 0 0 var(--accent); }
+  .pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; background: none; border: 0; color: inherit; text-align: left; padding: 4px 0; cursor: pointer; font: inherit; min-height: 40px; }
+  .logo { width: 40px; height: 40px; flex: none; border-radius: 4px; background: var(--panel-2); object-fit: contain; display: grid; place-items: center; font: 700 15px var(--display); color: var(--muted); }
+  .txt { min-width: 0; display: grid; }
+  .txt b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .txt small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .star { flex: none; width: 40px; height: 40px; background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; border-radius: 6px; }
+  .star.on { color: var(--accent); }
+  .note { color: var(--muted); font-size: 13px; margin: 0; }
+  h2 { margin: 6px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  code { font-family: var(--mono); color: var(--fg); overflow-wrap: anywhere; }
+  .file { position: relative; overflow: hidden; display: inline-block; }
+  .file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Clean<span>.</span>Player</h1>
+
+  <div class="screen">
+    <video id="video" controls playsinline></video>
+    <iframe id="frame" hidden allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" title="Video player"></iframe>
+    <div class="empty" id="empty">Paste a link or pick a channel</div>
+  </div>
+
+  <div class="now"><b id="nowName">Nothing playing</b><small id="nowGroup"></small></div>
+  <p class="msg" id="msg"></p>
+
+  <nav role="tablist">
+    <button role="tab" data-tab="link" aria-selected="true">Link</button>
+    <button role="tab" data-tab="channels" aria-selected="false">Channels</button>
+    <button role="tab" data-tab="favs" aria-selected="false">Favourites</button>
+    <button role="tab" data-tab="recent" aria-selected="false">Recent</button>
+    <button role="tab" data-tab="playlists" aria-selected="false">Playlists</button>
+  </nav>
+
+  <section id="tab-link">
+    <form class="bar" id="linkForm">
+      <input id="linkUrl" type="url" placeholder="Paste a web page or video link" autocomplete="off" required>
+      <button class="go" type="submit">Find video</button>
+    </form>
+    <p class="note">Works with free pages that openly share their video, plus YouTube, Vimeo, Dailymotion and direct stream links. Pages that need a login, a subscription or copy protection won't work.</p>
+    <div class="list" id="resultList"></div>
+    <p class="note" id="origWrap" hidden><a id="orig" target="_blank" rel="noopener">Open the original page instead</a></p>
+  </section>
+
+  <section id="tab-channels" hidden>
+    <div class="bar">
+      <input id="search" type="search" placeholder="Search channels" autocomplete="off">
+      <select id="group" aria-label="Category"></select>
+    </div>
+    <p class="note" id="count"></p>
+    <div class="list" id="channelList"></div>
+  </section>
+
+  <section id="tab-favs" hidden>
+    <div class="list" id="favList"></div>
+  </section>
+
+  <section id="tab-recent" hidden>
+    <div class="list" id="recentList"></div>
+  </section>
+
+  <section id="tab-playlists" hidden>
+    <h2>Add a playlist</h2>
+    <form class="bar" id="addForm">
+      <input id="plName" type="text" placeholder="Name (optional)" autocomplete="off">
+      <input id="plUrl" type="url" placeholder="https://example.com/playlist.m3u" autocomplete="off" required>
+      <button class="go" type="submit">Add</button>
+    </form>
+    <div><span class="plain file">Import .m3u file<input id="plFile" type="file" accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,text/plain"></span></div>
+
+    <h2>Your playlists</h2>
+    <div class="list" id="playlistList"></div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js"></script>
+<script>
+const SAMPLE = `#EXTM3U
+#EXTINF:-1 group-title="Samples",Big Buck Bunny
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 group-title="Samples",Sintel
+https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8
+#EXTINF:-1 group-title="Samples",Tears of Steel
+https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8`;
+
+const KEY = "cleanplayer.v1";
+const $ = id => document.getElementById(id);
+const video = $("video");
+const frame = $("frame");
+let hls = null;
+let current = null;
+
+/* ---------- saved data ---------- */
+function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
+let state = load() || {
+  playlists: [{ id: "sample", name: "Samples", url: "", text: SAMPLE }],
+  favs: [],
+  recent: []
+};
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); return true; }
+  catch { return false; }
+}
+
+/* ---------- link helpers ---------- */
+function kindOf(u) {
+  if (/\.m3u8(\?|#|$)/i.test(u)) return "stream";
+  if (/\.(mp4|webm|ogg|ogv|mov|m4v)(\?|#|$)/i.test(u)) return "file";
+  return "page";
+}
+function toEmbed(u) {
+  let x;
+  try { x = new URL(u); } catch { return null; }
+  const h = x.hostname.replace(/^(www|m)\./, "");
+  let id = null;
+  if (h === "youtu.be") id = x.pathname.slice(1).split("/")[0];
+  else if (h.endsWith("youtube.com") || h.endsWith("youtube-nocookie.com")) {
+    id = x.searchParams.get("v");
+    if (!id) {
+      const m = x.pathname.match(/\/(embed|shorts|live|v)\/([\w-]{6,})/);
+      if (m) id = m[2];
+    }
+  }
+  if (id) return "https://www.youtube-nocookie.com/embed/" + id;
+  if (h === "vimeo.com" || h === "player.vimeo.com") {
+    const m = x.pathname.match(/(\d{5,})/);
+    if (m) return "https://player.vimeo.com/video/" + m[1];
+  }
+  if (h.endsWith("dailymotion.com")) {
+    const m = x.pathname.match(/\/(?:embed\/)?video\/([a-z0-9]+)/i);
+    if (m) return "https://www.dailymotion.com/embed/video/" + m[1];
+  }
+  if (h === "dai.ly" && x.pathname.length > 1) return "https://www.dailymotion.com/embed/video/" + x.pathname.slice(1);
+  return null;
+}
+const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return "Link"; } };
+
+/* ---------- playlist parsing ---------- */
+function parseM3U(text, source) {
+  const out = [];
+  let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("#EXTINF")) {
+      let inQuote = false, cut = -1;
+      for (let i = 0; i < line.length; i++) {
+        if (line[i] === '"') inQuote = !inQuote;
+        else if (line[i] === "," && !inQuote) { cut = i; break; }
+      }
+      const head = cut >= 0 ? line.slice(0, cut) : line;
+      const attrs = {};
+      head.replace(/([\w-]+)="([^"]*)"/g, (_, k, v) => { attrs[k.toLowerCase()] = v; });
+      cur = {
+        name: (cut >= 0 ? line.slice(cut + 1) : "").trim() || attrs["tvg-name"] || "",
+        logo: attrs["tvg-logo"] || "",
+        group: attrs["group-title"] || ""
+      };
+    } else if (line.startsWith("#EXTGRP:")) {
+      if (cur) cur.group = line.slice(8).trim();
+    } else if (!line.startsWith("#")) {
+      out.push({
+        name: (cur && cur.name) || line.split("/").pop() || line,
+        url: line,
+        logo: (cur && cur.logo) || "",
+        group: (cur && cur.group) || "Other",
+        source
+      });
+      cur = null;
+    }
+  }
+  return out;
+}
+
+let channels = [];
+function rebuild() {
+  channels = state.playlists.flatMap(p => p.text ? parseM3U(p.text, p.name) : []);
+  const groups = [...new Set(channels.map(c => c.group))].sort((a, b) => a.localeCompare(b));
+  const sel = $("group");
+  const keep = sel.value;
+  sel.innerHTML = "";
+  sel.append(new Option("All categories", ""));
+  groups.forEach(g => sel.append(new Option(g, g)));
+  sel.value = groups.includes(keep) ? keep : "";
+  renderAll();
+}
+
+/* ---------- rendering ---------- */
+const isFav = url => state.favs.some(f => f.url === url);
+let results = [];
+
+function row(ch) {
+  const r = document.createElement("div");
+  r.className = "row" + (current && current.url === ch.url ? " playing" : "");
+
+  const pick = document.createElement("button");
+  pick.className = "pick";
+  pick.type = "button";
+  let logo;
+  if (ch.logo) {
+    logo = document.createElement("img");
+    logo.src = ch.logo; logo.alt = ""; logo.loading = "lazy";
+    logo.onerror = () => logo.replaceWith(letter(ch.name));
+    logo.className = "logo";
+  } else logo = letter(ch.name);
+  const t = document.createElement("span");
+  t.className = "txt";
+  const b = document.createElement("b"); b.textContent = ch.name;
+  const s = document.createElement("small"); s.textContent = ch.group || "";
+  t.append(b, s);
+  pick.append(logo, t);
+  pick.onclick = () => play(ch);
+
+  const star = document.createElement("button");
+  star.type = "button";
+  const on = isFav(ch.url);
+  star.className = "star" + (on ? " on" : "");
+  star.textContent = on ? "★" : "☆";
+  star.setAttribute("aria-label", on ? "Remove from favourites" : "Add to favourites");
+  star.onclick = () => toggleFav(ch);
+
+  r.append(pick, star);
+  return r;
+}
+function letter(name) {
+  const d = document.createElement("span");
+  d.className = "logo";
+  d.textContent = (name || "?").trim().charAt(0).toUpperCase();
+  return d;
+}
+
+const LIMIT = 300;
+function renderChannels() {
+  const q = $("search").value.trim().toLowerCase();
+  const g = $("group").value;
+  const hits = channels.filter(c => (!g || c.group === g) && (!q || c.name.toLowerCase().includes(q)));
+  $("channelList").replaceChildren(...hits.slice(0, LIMIT).map(row));
+  $("count").textContent = !channels.length
+    ? "No channels yet. Add a playlist in the Playlists tab."
+    : hits.length > LIMIT
+      ? `Showing ${LIMIT} of ${hits.length} channels. Search to narrow it down.`
+      : `${hits.length} channel${hits.length === 1 ? "" : "s"}`;
+}
+function renderList(id, items, emptyText) {
+  const list = $(id);
+  if (!items.length) {
+    const p = document.createElement("p");
+    p.className = "note"; p.textContent = emptyText;
+    list.replaceChildren(p);
+  } else list.replaceChildren(...items.map(row));
+}
+function renderPlaylists() {
+  const list = $("playlistList");
+  if (!state.playlists.length) { renderList("playlistList", [], "No playlists yet."); return; }
+  list.replaceChildren(...state.playlists.map(p => {
+    const r = document.createElement("div");
+    r.className = "row";
+    const t = document.createElement("span");
+    t.className = "txt"; t.style.flex = "1"; t.style.padding = "6px 0";
+    const b = document.createElement("b"); b.textContent = p.name;
+    const n = p.text ? parseM3U(p.text, p.name).length : 0;
+    const s = document.createElement("small");
+    s.textContent = `${n} channel${n === 1 ? "" : "s"}` + (p.url ? " · updates from link" : " · saved file");
+    t.append(b, s);
+    r.append(t);
+    if (p.url) {
+      const up = document.createElement("button");
+      up.className = "plain"; up.type = "button"; up.textContent = "Refresh";
+      up.onclick = () => refresh(p, true);
+      r.append(up);
+    }
+    const del = document.createElement("button");
+    del.className = "plain"; del.type = "button"; del.textContent = "Remove";
+    del.onclick = () => {
+      if (del.dataset.sure) {
+        state.playlists = state.playlists.filter(x => x !== p);
+        save(); rebuild(); say(`Removed ${p.name}.`);
+      } else { del.dataset.sure = "1"; del.textContent = "Tap to confirm"; }
+    };
+    r.append(del);
+    return r;
+  }));
+}
+function renderAll() {
+  renderChannels();
+  renderList("favList", state.favs, "Tap the star next to anything you play to save it here.");
+  renderList("recentList", state.recent, "Things you play will show up here.");
+  if (results.length) $("resultList").replaceChildren(...results.map(row));
+  renderPlaylists();
+}
+
+/* ---------- messages ---------- */
+function say(text, isError) {
+  $("msg").textContent = text || "";
+  $("msg").className = isError ? "msg err" : "msg";
+}
+
+/* ---------- favourites and recent ---------- */
+function slim(ch) { return { name: ch.name, url: ch.url, logo: ch.logo || "", group: ch.group || "", kind: ch.kind || "" }; }
+function toggleFav(ch) {
+  if (isFav(ch.url)) state.favs = state.favs.filter(f => f.url !== ch.url);
+  else state.favs.unshift(slim(ch));
+  save(); renderAll();
+}
+function addRecent(ch) {
+  state.recent = [slim(ch), ...state.recent.filter(r => r.url !== ch.url)].slice(0, 30);
+  save();
+}
+
+/* ---------- playback ---------- */
+function stopAll() {
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+  frame.src = "about:blank";
+}
+
+function play(ch) {
+  stopAll();
+  say("");
+  current = ch;
+  $("empty").hidden = true;
+  $("nowName").textContent = ch.name;
+  $("nowGroup").textContent = ch.group || "";
+
+  if (ch.kind === "embed") {
+    video.hidden = true;
+    frame.hidden = false;
+    frame.src = ch.url;
+    if (/youtube/.test(ch.url)) say("Playing in YouTube's own player, which may show YouTube's ads.");
+    else say("Playing in the site's own player.");
+  } else {
+    frame.hidden = true;
+    video.hidden = false;
+    if (location.protocol === "https:" && ch.url.startsWith("http:")) {
+      say("This stream uses an http link, which browsers often block on https pages.", true);
+    }
+    const plainFile = kindOf(ch.url) === "file";
+    if (!plainFile && window.Hls && Hls.isSupported()) {
+      hls = new Hls();
+      hls.on(Hls.Events.ERROR, (_, d) => {
+        if (d.fatal) say("This stream couldn't load. It may be offline, or the source doesn't allow other apps to play it.", true);
+      });
+      hls.loadSource(ch.url);
+      hls.attachMedia(video);
+    } else {
+      video.src = ch.url;
+    }
+    video.play().catch(() => {});
+  }
+
+  addRecent(ch);
+  renderAll();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+video.addEventListener("error", () => {
+  if (!hls && current && current.kind !== "embed" && video.getAttribute("src")) {
+    say("This video couldn't load. It may be offline, or your browser can't play this format.", true);
+  }
+});
+
+/* ---------- link viewer ---------- */
+async function openLink(raw) {
+  let u;
+  try { u = new URL(raw.trim()); }
+  catch { say("That doesn't look like a full web address. It should start with https://", true); return; }
+
+  $("linkUrl").value = u.href;
+  $("orig").href = u.href;
+  $("origWrap").hidden = true;
+  results = [];
+  $("resultList").replaceChildren();
+
+  const name = hostOf(u.href);
+  const embed = toEmbed(u.href);
+  if (embed) return play({ name, url: embed, kind: "embed", group: "Web link" });
+  const k = kindOf(u.href);
+  if (k !== "page") return play({ name, url: u.href, kind: k, group: "Web link" });
+
+  if (location.protocol === "file:") {
+    say("Finding videos inside web pages only works on the online version of Clean Player.", true);
+    $("origWrap").hidden = false;
+    return;
+  }
+
+  say("Looking for a video on that page…");
+  let data;
+  try {
+    const r = await fetch("api/find?url=" + encodeURIComponent(u.href));
+    try { data = await r.json(); } catch { throw new Error("The video finder isn't set up on this site yet. See README.md."); }
+    if (!r.ok) throw new Error(data.error || "Couldn't check that page.");
+  } catch (err) {
+    say(err.message, true);
+    $("origWrap").hidden = false;
+    return;
+  }
+
+  if (!data.results || !data.results.length) {
+    say("No free video was found on that page. It may need a login, use copy protection, or load its player in a way this can't read.", true);
+    $("origWrap").hidden = false;
+    return;
+  }
+
+  const title = data.title || name;
+  results = data.results.map((x, i) => ({
+    name: title,
+    url: x.url,
+    kind: x.kind,
+    group: `${hostOf(x.url)} · ${x.from}` + (data.results.length > 1 ? ` · option ${i + 1}` : "")
+  }));
+  play(results[0]);
+  if (results.length > 1) say(`Found ${results.length} videos. If the first one isn't right, pick another below.`);
+  $("origWrap").hidden = false;
+}
+
+$("linkForm").addEventListener("submit", e => {
+  e.preventDefault();
+  openLink($("linkUrl").value);
+});
+
+/* ---------- adding playlists ---------- */
+async function fetchText(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.text();
+}
+async function refresh(p, loud) {
+  try {
+    if (loud) say(`Updating ${p.name}…`);
+    const text = await fetchText(p.url);
+    if (!/#EXTM3U|#EXTINF/i.test(text)) throw new Error("not a playlist");
+    p.text = text;
+    if (!save()) say(`${p.name} is too big to store on this device. It will reload from its link each time.`);
+    else if (loud) say(`Updated ${p.name}.`);
+    rebuild();
+  } catch {
+    if (loud) say(`Couldn't update ${p.name}. Showing the last saved copy.`, true);
+  }
+}
+
+$("addForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const url = $("plUrl").value.trim();
+  const name = $("plName").value.trim() || hostOf(url);
+  say("Loading playlist…");
+  try {
+    const text = await fetchText(url);
+    if (!/#EXTM3U|#EXTINF/i.test(text)) throw new Error("not a playlist");
+    state.playlists.push({ id: Date.now().toString(36), name, url, text });
+    if (!save()) say(`Added ${name}, but it's too big to store on this device. It will reload from its link each time.`);
+    else say(`Added ${name}.`);
+    $("plUrl").value = ""; $("plName").value = "";
+    rebuild();
+  } catch {
+    say("Couldn't load that playlist. Check the link, or the site may not let other apps read it. If you can download the .m3u file, use Import instead.", true);
+  }
+});
+
+$("plFile").addEventListener("change", async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  if (!/#EXTINF/i.test(text)) { say("That file isn't an M3U playlist.", true); return; }
+  const name = f.name.replace(/\.(m3u8?|txt)$/i, "");
+  state.playlists.push({ id: Date.now().toString(36), name, url: "", text });
+  if (!save()) say(`Imported ${name}, but it's too big to keep after you close the app.`, true);
+  else say(`Imported ${name}.`);
+  e.target.value = "";
+  rebuild();
+});
+
+/* ---------- tabs and filters ---------- */
+document.querySelectorAll("nav button").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b === btn));
+    document.querySelectorAll("main > section").forEach(s => { s.hidden = s.id !== "tab-" + btn.dataset.tab; });
+  };
+});
+$("search").addEventListener("input", renderChannels);
+$("group").addEventListener("change", renderChannels);
+
+/* ---------- start ---------- */
+rebuild();
+state.playlists.filter(p => p.url).forEach(p => refresh(p, false));
+const shared = new URLSearchParams(location.search).get("url");
+if (shared) openLink(shared);
+</script>
+</body>
+</html>

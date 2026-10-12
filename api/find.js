@@ -3,7 +3,6 @@
 // sharing tags (og:video), page video info (schema.org VideoObject), <video> tags,
 // embedded players and plain stream links in the page.
 // If the page has none, it opens the site's own embedded player (same website only, one step).
-// If still nothing, it returns the page's own links so the app can drill down.
 // It never logs in, gets round paywalls or breaks copy protection.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|.*\.local$|.*\.internal$)/i;
@@ -147,33 +146,6 @@ function extract(html, pageHref) {
   return { found, frames, title: decode(title) };
 }
 
-// Collect every clickable http(s) link on the page so the app can drill down.
-function collectLinks(html, pageHref) {
-  const out = [];
-  const seen = new Set();
-  const push = (raw, label) => {
-    if (!raw) return;
-    let u;
-    try { u = new URL(decode(String(raw).trim()), pageHref).href; } catch { return; }
-    if (!/^https?:/i.test(u)) return;
-    try { if (BLOCKED_HOST.test(new URL(u).hostname)) return; } catch { return; }
-    if (seen.has(u)) return;
-    seen.add(u);
-    out.push({ url: u, label: String(label || "").replace(/\s+/g, " ").trim().slice(0, 120) });
-  };
-
-  // <a href="...">…label…</a>
-  for (const m of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
-    const a = attrs("<a " + m[1] + ">");
-    if (!a.href) continue;
-    if (/^(#|mailto:|javascript:|tel:)/i.test(a.href)) continue;
-    const label = m[2].replace(/<[^>]*>/g, " ");
-    push(a.href, label);
-  }
-
-  return out;
-}
-
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "no-store");
@@ -196,11 +168,7 @@ module.exports = async (req, res) => {
     if (!r.ok) return send(502, { error: `That site answered with error ${r.status}. It may need a login or block outside apps.` });
     const type = r.headers.get("content-type") || "";
     if (/mpegurl|video\//i.test(type)) {
-      return send(200, {
-        title: page.hostname,
-        results: [{ url: page.href, kind: /mpegurl/i.test(type) ? "stream" : "file", from: "Direct link" }],
-        links: []
-      });
+      return send(200, { title: page.hostname, results: [{ url: page.href, kind: /mpegurl/i.test(type) ? "stream" : "file", from: "Direct link" }] });
     }
     html = (await r.text()).slice(0, 3000000);
   } catch {
@@ -233,21 +201,5 @@ module.exports = async (req, res) => {
   const rank = { stream: 0, file: 1, embed: 2 };
   found.sort((a, b) => rank[a.kind] - rank[b.kind]);
 
-  // If no video was found, hand back the page's own links so the app can drill down.
-  let links = [];
-  if (!found.length) {
-    links = collectLinks(html, page.href).slice(0, 60);
-    const score = l => {
-      if (/\.(m3u8|mp4|webm|ogg|mov|m4v)(\?|#|$)/i.test(l.url)) return 0;
-      if (/video|watch|play|embed|player|stream|media|movie|episode|film|clip/i.test(l.url + " " + l.label)) return 1;
-      return 2;
-    };
-    links.sort((a, b) => score(a) - score(b));
-  }
-
-  return send(200, {
-    title: first.title || page.hostname,
-    results: found.slice(0, 10),
-    links
-  });
+  return send(200, { title: first.title || page.hostname, results: found.slice(0, 10) });
 };

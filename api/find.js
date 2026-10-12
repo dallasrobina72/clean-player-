@@ -2,6 +2,7 @@
 // Opens a public web page and returns the video it openly shares about itself:
 // sharing tags (og:video), page video info (schema.org VideoObject), <video> tags,
 // embedded players and plain stream links in the page.
+// If the page has none, it opens the site's own embedded player (same website only, one step).
 // It never logs in, gets round paywalls or breaks copy protection.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|.*\.local$|.*\.internal$)/i;
@@ -55,27 +56,18 @@ function toEmbed(u) {
   return null;
 }
 
-module.exports = async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "no-store");
-  const send = (code, obj) => {
-    res.statusCode = code;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(obj));
-  };
+// The site's main name, e.g. "bbc.co.uk" for "www.bbc.co.uk", "example.com" for "player.example.com"
+function siteOf(hostname) {
+  const parts = hostname.toLowerCase().split(".");
+  const twoPart = /^(co|com|org|net|gov|ac|ltd|plc)$/.test(parts[parts.length - 2] || "") && parts.length > 2;
+  return parts.slice(twoPart ? -3 : -2).join(".");
+}
 
-  let page;
-  try { page = new URL(String((req.query && req.query.url) || "")); }
-  catch { return send(400, { error: "That isn't a full web address. It should start with https://" }); }
-  if (!/^https?:$/.test(page.protocol) || BLOCKED_HOST.test(page.hostname)) {
-    return send(400, { error: "That address can't be checked." });
-  }
-
-  let html;
+async function getPage(href) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-    const r = await fetch(page.href, {
+    const r = await fetch(href, {
       signal: ctrl.signal,
       redirect: "follow",
       headers: {
@@ -83,29 +75,23 @@ module.exports = async (req, res) => {
         "Accept": "text/html,application/xhtml+xml,*/*"
       }
     });
+    return r;
+  } finally {
     clearTimeout(timer);
-    if (!r.ok) return send(502, { error: `That site answered with error ${r.status}. It may need a login or block outside apps.` });
-    const type = r.headers.get("content-type") || "";
-    if (/mpegurl|video\//i.test(type)) {
-      return send(200, { title: page.hostname, results: [{ url: page.href, kind: /mpegurl/i.test(type) ? "stream" : "file", from: "Direct link" }] });
-    }
-    html = (await r.text()).slice(0, 3000000);
-  } catch {
-    return send(502, { error: "Couldn't reach that page. Check the link and try again." });
   }
+}
 
+// Reads one page's HTML and lists the videos it shares, plus its iframe addresses.
+function extract(html, pageHref) {
   const found = [];
-  const seen = new Set();
+  const frames = [];
   function add(raw, from) {
     if (!raw || typeof raw !== "string") return;
     let u;
-    try { u = new URL(decode(raw.trim()), page.href).href; } catch { return; }
+    try { u = new URL(decode(raw.trim()), pageHref).href; } catch { return; }
     if (!/^https?:/i.test(u)) return;
     const e = toEmbed(u);
-    const url = e || u;
-    if (seen.has(url)) return;
-    seen.add(url);
-    found.push({ url, kind: e ? "embed" : kindOf(u), from });
+    found.push({ url: e || u, kind: e ? "embed" : kindOf(u), from });
   }
   function walk(o) {
     if (Array.isArray(o)) return o.forEach(walk);
@@ -144,7 +130,9 @@ module.exports = async (req, res) => {
     const s = a.src || a["data-src"];
     if (!s) continue;
     let abs;
-    try { abs = new URL(decode(s), page.href).href; } catch { continue; }
+    try { abs = new URL(decode(s), pageHref).href; } catch { continue; }
+    if (!/^https?:/i.test(abs)) continue;
+    frames.push(abs);
     if (toEmbed(abs) || /player|embed|video/i.test(abs)) add(abs, "Embedded player");
   }
   meta("twitter:player").forEach(u => add(u, "Shared player tag"));
@@ -154,9 +142,64 @@ module.exports = async (req, res) => {
     add(m[0], "Link in page");
   }
 
+  const title = (meta("og:title")[0] || (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || "").trim();
+  return { found, frames, title: decode(title) };
+}
+
+module.exports = async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "no-store");
+  const send = (code, obj) => {
+    res.statusCode = code;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(obj));
+  };
+
+  let page;
+  try { page = new URL(String((req.query && req.query.url) || "")); }
+  catch { return send(400, { error: "That isn't a full web address. It should start with https://" }); }
+  if (!/^https?:$/.test(page.protocol) || BLOCKED_HOST.test(page.hostname)) {
+    return send(400, { error: "That address can't be checked." });
+  }
+
+  let html;
+  try {
+    const r = await getPage(page.href);
+    if (!r.ok) return send(502, { error: `That site answered with error ${r.status}. It may need a login or block outside apps.` });
+    const type = r.headers.get("content-type") || "";
+    if (/mpegurl|video\//i.test(type)) {
+      return send(200, { title: page.hostname, results: [{ url: page.href, kind: /mpegurl/i.test(type) ? "stream" : "file", from: "Direct link" }] });
+    }
+    html = (await r.text()).slice(0, 3000000);
+  } catch {
+    return send(502, { error: "Couldn't reach that page. Check the link and try again." });
+  }
+
+  const first = extract(html, page.href);
+  let found = first.found;
+
+  // Nothing on the page itself: open the site's own embedded player (same website only, one step, up to 3 players)
+  if (!found.length) {
+    const site = siteOf(page.hostname);
+    const own = [...new Set(first.frames)]
+      .filter(f => { try { const h = new URL(f).hostname; return siteOf(h) === site && !BLOCKED_HOST.test(h); } catch { return false; } })
+      .slice(0, 3);
+    for (const f of own) {
+      try {
+        const r = await getPage(f);
+        if (!r.ok) continue;
+        const inner = extract((await r.text()).slice(0, 3000000), f);
+        inner.found.forEach(x => { x.from = "Site's own player"; });
+        found = found.concat(inner.found);
+        if (!inner.found.length) found.push({ url: f, kind: "embed", from: "Site's own player" });
+      } catch {}
+    }
+  }
+
+  const seen = new Set();
+  found = found.filter(x => !seen.has(x.url) && seen.add(x.url));
   const rank = { stream: 0, file: 1, embed: 2 };
   found.sort((a, b) => rank[a.kind] - rank[b.kind]);
 
-  const title = (meta("og:title")[0] || (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || page.hostname).trim();
-  return send(200, { title: decode(title), results: found.slice(0, 10) });
+  return send(200, { title: first.title || page.hostname, results: found.slice(0, 10) });
 };

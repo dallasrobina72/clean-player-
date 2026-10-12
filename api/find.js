@@ -1,7 +1,7 @@
 // Clean Player finder.
 // Opens a public web page and returns the video it openly shares about itself:
 // sharing tags (og:video), page video info (schema.org VideoObject), <video> tags,
-// embedded players, plain stream links, and cleaned match fixture links.
+// embedded players, plain stream links, and filtered broadcast stream links.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|[?::1]?$|.*\.local$\vert{}.*\.internal$)/i;
 
@@ -12,6 +12,8 @@ function decode(s) {
     .replace(/&#39;/g, "'")
     .replace(/&#x2F;/gi, "/")
     .replace(/&nbsp;/gi, " ")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
     .replace(/\\\//g, "/");
 }
 
@@ -105,23 +107,31 @@ function extract(html, pageHref) {
 
     if (pathname === "/" || pathname === "" || pathname === "/index.html") return;
 
-    const hasVs = /[-_]vs[-_]|\bvs\b/.test(pathname);
-    const hasNumericId = /\/\d{4,}\/?$/.test(pathname) || /\/\d{4,}\//.test(pathname);
-    const isStreamSubdomain = /^links\.|^live\d*\./i.test(hostname);
-
-    if (!hasVs && !hasNumericId && !isStreamSubdomain) {
-      const segments = pathname.split("/").filter(Boolean);
-      if (segments.length <= 2 && !/\d/.test(pathname)) {
-        return;
-      }
-    }
-
-    // Clean up text: decode entities, normalize whitespace, and strip out status/timer clutter
+    // Clean up text: decode entities, strip out status/timer clutter
     let text = decode(rawText.replace(/<[^>]*>/g, " "));
     text = text.replace(/^(Match Started|Ended|\d+\s*(min|hr|hrs|hours|m)(\s*and\s*\d+\s*(min|m))?\s*from\s*now)\s*/i, "").trim();
     text = text.replace(/\s+/g, " ");
 
-    if (!text) text = u;
+    const lowerText = text.toLowerCase();
+
+    // Blacklist menu headers, sports categories, leagues, and team names
+    const blacklist = [
+      "football", "soccer", "premier league", "champions league", "europa league", 
+      "la liga", "serie a", "bundseliga", "ligue 1", "formula 1", "motogp", 
+      "boxing", "cricket", "tennis", "joshua vs usyk", "manchester united", 
+      "liverpool", "chelsea", "man city", "arsenal", "tottenham", "real madrid", 
+      "barcelona", "atletico madrid", "psg", "bayern munich", "juventus", 
+      "inter milan", "ac milan", "fifa world cup"
+    ];
+    if (blacklist.some(b => lowerText === b || (lowerText.length < 25 && lowerText.includes(b)))) {
+      return;
+    }
+
+    // Must be a broadcast stream link (contains watch/stream/sports keywords or external stream provider domain)
+    const isStreamIndicator = /watch|stream|tnt|sky|bt\s*sport|supersport|espn|fhd|hd|sports|channel|soccerstreams|hesgoal|crackstreams|weakstreams|sportsbest|pitchstream|alpha|ripple|wolfstreams|wawes|supertipz/i.test(lowerText) ||
+                              /^live\d*\.|^links\.|fxtrend|pitchstream|alphastreams|ripplestream|wolfstreams|footyicon|wildgames/i.test(hostname);
+
+    if (!isStreamIndicator) return;
 
     links.push({ url: u, text });
   }

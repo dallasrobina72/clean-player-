@@ -1,9 +1,7 @@
 // Clean Player finder.
 // Opens a public web page and returns the video it openly shares about itself:
 // sharing tags (og:video), page video info (schema.org VideoObject), <video> tags,
-// embedded players and plain stream links in the page.
-// If the page has none, it opens the site's own embedded player (same website only, one step).
-// It never logs in, gets round paywalls or breaks copy protection.
+// embedded players, plain stream links, and navigable page links.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|.*\.local$|.*\.internal$)/i;
 
@@ -56,7 +54,6 @@ function toEmbed(u) {
   return null;
 }
 
-// The site's main name, e.g. "bbc.co.uk" for "www.bbc.co.uk", "example.com" for "player.example.com"
 function siteOf(hostname) {
   const parts = hostname.toLowerCase().split(".");
   const twoPart = /^(co|com|org|net|gov|ac|ltd|plc)$/.test(parts[parts.length - 2] || "") && parts.length > 2;
@@ -81,10 +78,11 @@ async function getPage(href) {
   }
 }
 
-// Reads one page's HTML and lists the videos it shares, plus its iframe addresses.
 function extract(html, pageHref) {
   const found = [];
   const frames = [];
+  const links = [];
+
   function add(raw, from) {
     if (!raw || typeof raw !== "string") return;
     let u;
@@ -93,6 +91,15 @@ function extract(html, pageHref) {
     const e = toEmbed(u);
     found.push({ url: e || u, kind: e ? "embed" : kindOf(u), from });
   }
+
+  function addLink(raw, text) {
+    if (!raw || typeof raw !== "string") return;
+    let u;
+    try { u = new URL(decode(raw.trim()), pageHref).href; } catch { return; }
+    if (!/^https?:/i.test(u)) return;
+    links.push({ url: u, text: (text || u).trim() });
+  }
+
   function walk(o) {
     if (Array.isArray(o)) return o.forEach(walk);
     if (!o || typeof o !== "object") return;
@@ -109,22 +116,18 @@ function extract(html, pageHref) {
     .filter(m => (m.property || m.name || "").toLowerCase() === name)
     .map(m => m.content);
 
-  // 1. Sharing tags the page publishes for its video
   ["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"]
     .forEach(n => meta(n).forEach(u => add(u, "Shared video tag")));
 
-  // 2. Structured video info
   for (const m of html.matchAll(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
     try { walk(JSON.parse(m[1])); } catch {}
   }
 
-  // 3. Video tags on the page
   for (const tag of html.match(/<(video|source)\b[^>]*>/gi) || []) {
     const a = attrs(tag);
     add(a.src || a["data-src"], "Video on page");
   }
 
-  // 4. Embedded players
   for (const tag of html.match(/<iframe\b[^>]*>/gi) || []) {
     const a = attrs(tag);
     const s = a.src || a["data-src"];
@@ -137,13 +140,22 @@ function extract(html, pageHref) {
   }
   meta("twitter:player").forEach(u => add(u, "Shared player tag"));
 
-  // 5. Plain stream or video links written into the page
   for (const m of html.matchAll(/https?:\\?\/\\?\/[^\s"'<>]+?\.(m3u8|mp4)(\?[^\s"'<>\\]*)?/gi)) {
     add(m[0], "Link in page");
   }
 
+  // Extract page navigation links
+  for (const tag of html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const aAttrs = attrs(tag[0]);
+    const href = aAttrs.href;
+    if (href && !href.startsWith("#") && !href.startsWith("javascript:")) {
+      const text = tag[1].replace(/<[^>]*>/g, "").trim();
+      addLink(href, text || href);
+    }
+  }
+
   const title = (meta("og:title")[0] || (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || "").trim();
-  return { found, frames, title: decode(title) };
+  return { found, frames, links, title: decode(title) };
 }
 
 module.exports = async (req, res) => {
@@ -168,7 +180,7 @@ module.exports = async (req, res) => {
     if (!r.ok) return send(502, { error: `That site answered with error ${r.status}. It may need a login or block outside apps.` });
     const type = r.headers.get("content-type") || "";
     if (/mpegurl|video\//i.test(type)) {
-      return send(200, { title: page.hostname, results: [{ url: page.href, kind: /mpegurl/i.test(type) ? "stream" : "file", from: "Direct link" }] });
+      return send(200, { title: page.hostname, results: [{ url: page.href, kind: /mpegurl/i.test(type) ? "stream" : "file", from: "Direct link" }], links: [] });
     }
     html = (await r.text()).slice(0, 3000000);
   } catch {
@@ -178,7 +190,6 @@ module.exports = async (req, res) => {
   const first = extract(html, page.href);
   let found = first.found;
 
-  // Nothing on the page itself: open the site's own embedded player (same website only, one step, up to 3 players)
   if (!found.length) {
     const site = siteOf(page.hostname);
     const own = [...new Set(first.frames)]
@@ -201,5 +212,12 @@ module.exports = async (req, res) => {
   const rank = { stream: 0, file: 1, embed: 2 };
   found.sort((a, b) => rank[a.kind] - rank[b.kind]);
 
-  return send(200, { title: first.title || page.hostname, results: found.slice(0, 10) });
+  const seenLinks = new Set();
+  const uniqueLinks = first.links.filter(l => !seenLinks.has(l.url) && seenLinks.add(l.url));
+
+  return send(200, {
+    title: first.title || page.hostname,
+    results: found.slice(0, 10),
+    links: uniqueLinks.slice(0, 40)
+  });
 };

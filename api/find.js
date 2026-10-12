@@ -1,7 +1,7 @@
 // Clean Player finder.
 // Opens a public web page and returns the video it openly shares about itself:
 // sharing tags (og:video), page video info (schema.org VideoObject), <video> tags,
-// embedded players, plain stream links, and filtered match fixture links.
+// embedded players, plain stream links, and cleaned match fixture links.
 
 const BLOCKED_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|[?::1]?$|.*\.local$\vert{}.*\.internal$)/i;
 
@@ -11,6 +11,7 @@ function decode(s) {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&#x2F;/gi, "/")
+    .replace(/&nbsp;/gi, " ")
     .replace(/\\\//g, "/");
 }
 
@@ -92,7 +93,7 @@ function extract(html, pageHref) {
     found.push({ url: e || u, kind: e ? "embed" : kindOf(u), from });
   }
 
-  function addLink(raw, text) {
+  function addLink(raw, rawText) {
     if (!raw || typeof raw !== "string") return;
     let u;
     try { u = new URL(decode(raw.trim()), pageHref).href; } catch { return; }
@@ -102,24 +103,27 @@ function extract(html, pageHref) {
     const pathname = uObj.pathname.toLowerCase();
     const hostname = uObj.hostname.toLowerCase();
 
-    // Skip root, empty paths, or non-match links
     if (pathname === "/" || pathname === "" || pathname === "/index.html") return;
 
-    const segments = pathname.split("/").filter(Boolean);
-    
-    // Match fixture indicators: contains 'vs', a numeric event/match ID, or is on a streaming subdomain
     const hasVs = /[-_]vs[-_]|\bvs\b/.test(pathname);
     const hasNumericId = /\/\d{4,}\/?$/.test(pathname) || /\/\d{4,}\//.test(pathname);
     const isStreamSubdomain = /^links\.|^live\d*\./i.test(hostname);
 
-    // Filter out category headers (like /football, /premier-league) and team hubs unless they are actual matches
     if (!hasVs && !hasNumericId && !isStreamSubdomain) {
+      const segments = pathname.split("/").filter(Boolean);
       if (segments.length <= 2 && !/\d/.test(pathname)) {
         return;
       }
     }
 
-    links.push({ url: u, text: (text || u).trim() });
+    // Clean up text: decode entities, normalize whitespace, and strip out status/timer clutter
+    let text = decode(rawText.replace(/<[^>]*>/g, " "));
+    text = text.replace(/^(Match Started|Ended|\d+\s*(min|hr|hrs|hours|m)(\s*and\s*\d+\s*(min|m))?\s*from\s*now)\s*/i, "").trim();
+    text = text.replace(/\s+/g, " ");
+
+    if (!text) text = u;
+
+    links.push({ url: u, text });
   }
 
   function walk(o) {
@@ -166,13 +170,11 @@ function extract(html, pageHref) {
     add(m[0], "Link in page");
   }
 
-  // Extract filtered match navigation links
   for (const tag of html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)) {
     const aAttrs = attrs(tag[0]);
     const href = aAttrs.href;
     if (href && !href.startsWith("#") && !href.startsWith("javascript:")) {
-      const text = tag[1].replace(/<[^>]*>/g, "").trim();
-      addLink(href, text || href);
+      addLink(href, tag[1]);
     }
   }
 
